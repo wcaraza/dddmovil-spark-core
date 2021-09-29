@@ -1,0 +1,180 @@
+buildscript {
+    repositories {
+        maven { url = ARTIFACTORY_URL }
+	}
+    dependencies {
+       	classpath "org.sonarsource.scanner.gradle:sonarqube-gradle-plugin:${sonarqubeGradlePluginVersion}"
+       	classpath "org.jfrog.buildinfo:build-info-extractor-gradle:${jfrogBuildInfoPluginVersion}"
+        classpath "com.gradle.publish:plugin-publish-plugin:${publishGradlePluginVersion}"
+    }
+}
+
+group = group
+def projectName = description
+
+apply plugin: 'com.jfrog.artifactory'
+apply plugin: 'java'
+apply plugin: 'jacoco'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+apply plugin: 'org.sonarqube'
+apply plugin: 'eclipse'
+apply plugin: 'scala'
+
+configurations {
+	compile
+	provided
+	compile.extendsFrom provided
+}
+
+repositories {
+	
+    maven { url ARTIFACTORY_URL }
+    maven { url "https://artifactory.lima.bcp.com.pe/artifactory/SHCL.Snapshot/" }
+}
+
+
+dependencies {
+    testCompile("org.sonarsource.scanner.gradle:sonarqube-gradle-plugin:${sonarqubeGradlePluginVersion}") 
+	testCompile 'junit:junit:4.12'
+    testCompile 'org.scalatest:scalatest_2.11:2.1.+'
+    testRuntime 'org.pegdown:pegdown:1.6.0'
+	
+	compile group: 'org.apache.spark', name: 'spark-core_2.11', version: '2.0.2'
+	compile group: 'org.apache.spark', name: 'spark-sql_2.11', version: '2.0.2'
+	compile group: 'com.datastax.spark', name: 'spark-cassandra-connector_2.11', version: '2.0.6'
+	compile group: 'com.databricks', name: 'spark-avro_2.11', version: '3.2.0'
+	compile group: 'com.microsoft.azure', name: 'azure-sqldb-spark', version: '1.0.2'
+	
+	compile group: 'it.unimi.dsi', name: 'fastutil', version: '8.1.0'
+	compile group: 'com.bcp.shcl.libs', name: 'security',version:'1.0.0'
+	//compile group: 'com.bcp.shcl.libs', name: 'bcp-shcl-domain-core',version:'1.0-SNAPSHOT'
+	compile fileTree(dir: "${project.projectDir}/libs", include: ['*.jar','**/**.jar','**/**/**.jar'])
+	 	compile group: 'com.fasterxml.jackson.core', name: 'jackson-core', version: '2.9.6'
+	compile group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.9.6'
+	compile group: 'com.fasterxml.jackson.module', name: 'jackson-module-scala_2.11', version: '2.9.6'
+}
+
+compileJava { 
+  options.encoding = "UTF-8" 
+}
+
+task copyDependenciesLocal(type: Copy) {
+   String outputDir = "$project.projectDir/build/"+ version +"/dependencies";
+   from configurations.provided
+   into outputDir
+}
+
+sonarqube {
+    properties {
+        properties["sonar.language"] = "java"
+        properties["sonar.java.coveragePlugin"] = "jacoco"
+        properties["sonar.log.level"] = "TRACE"
+        properties["sonar.jacoco.reportPath"] = "${buildDir}/jacoco/jacocoTest.exec"
+    }
+}
+
+jacoco { 
+    toolVersion = "${jacocoPluginVersion}"
+    reportsDir = file("${buildDir}/customJacocoReportDir")
+}
+
+tasks.withType(JavaCompile) {
+	options.encoding = 'UTF-8'
+}
+
+compileJava.options.encoding = 'UTF-8'
+
+test {
+    jacoco {
+        append = false
+        destinationFile = file("${buildDir}/jacoco/jacocoTest.exec")
+    }
+}
+
+artifactory {
+  contextUrl = "${System.env.ARTIFACT_SERVER_URL}"
+    
+  publish {
+    repository {
+      repoKey = "${System.env.REPOKEY}"
+      username = "${System.env.ARTIFACT_USER_NAME}"
+      password = "${System.env.ARTIFACT_USER_PASSWORD}"
+      maven = true
+    }
+    defaults {
+    	publications('MavenPublication')
+        publishBuildInfo=true
+        publishArtifacts=true
+        publishPom=true
+        publishIvy=false
+    }
+	resolve {
+        repository {
+            repoKey = "${System.env.REPOKEY}"
+            addMatrixParams(['key': 'value'])
+            maven = true
+        }
+    }
+  }
+  // Redefine basic properties of the build info object
+  clientConfig.publisher.repoKey="${System.env.REPOKEY}"  
+  clientConfig.setIncludeEnvVars(true)
+  clientConfig.setEnvVarsExcludePatterns("${System.env.BUILD_INFO_ENVVARSEXCLUDEPATTERNS}")
+  clientConfig.info.setBuildName("${System.env.BUILD_NAME}")
+  clientConfig.info.setBuildNumber("${System.env.BUILD_UNIQUE_ID}")
+  clientConfig.info.setArtifactoryPluginVersion("${jfrogBuildInfoPluginVersion}")
+  clientConfig.info.setBuildUrl("${System.env.BUILD_URL}")
+  clientConfig.info.setVcsUrl("${System.env.BUILD_GIT_URL}")
+  clientConfig.timeout = 600 // Artifactory connection timeout (in seconds). The default timeout is 300 seconds.
+  
+  resolve {
+    contextUrl = "${System.env.ARTIFACT_SERVER_URL}"
+    repository {
+      repoKey='public'
+      maven=true
+    }
+  }  
+}
+
+allprojects {
+	apply plugin: 'com.jfrog.artifactory'
+	apply plugin: 'maven-publish'
+	
+	group = group
+    version = version
+    	
+    repositories {
+		maven { url  ARTIFACTORY_URL }
+        maven { url "${System.env.ARTIFACT_SERVER_URL}/${System.env.REPOKEY}" }
+        maven { url "${System.env.ARTIFACT_SERVER_URL}/public" }
+    }
+  
+    publishing {
+        publications {
+            MavenPublication(MavenPublication) {
+              	from components.java
+                afterEvaluate {
+                    artifactId = jar.baseName
+                }
+            }
+        }
+    }
+}
+
+jar {
+	baseName = artifactId	
+}
+
+subprojects {
+    publishing {
+        publications {
+            MavenPublication(MavenPublication) {
+                from components.java
+                afterEvaluate {
+                    artifactId = jar.baseName
+                }
+            }
+        }
+    }
+}
